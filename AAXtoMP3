@@ -7,7 +7,7 @@ extension=mp3
 mode=chaptered
 
 if [ "$#" -eq 0 ]; then
-        echo "Usage: bash AAXtoMP3.sh [--flac] [--single] AUTHCODE {FILES}"
+        echo "Usage: bash AAXtoMP3 [--flac] [--single] [--m4b] AUTHCODE {FILES}"
         exit 1
 fi
 
@@ -21,6 +21,14 @@ fi
 if [[ "$1" == '--single' ]]
 then
     mode=single
+    shift
+fi
+
+if [[ "$1" == '--m4b' ]]
+then
+    codec=copy
+    extension=m4b
+    mode=m4b
     shift
 fi
 
@@ -71,30 +79,56 @@ do
     mkdir -p "${output_directory}"
     full_file_path="${output_directory}/${title}.${extension}"
 
-    </dev/null ffmpeg -loglevel error -stats -activation_bytes "${auth_code}" -i "${path}" -vn -codec:a "${codec}" -ab "$(get_bitrate)k" -map_metadata -1 -metadata title="${title}" -metadata artist="${artist}" -metadata album_artist="$(get_metadata_value album_artist)" -metadata album="$(get_metadata_value album)" -metadata date="$(get_metadata_value date)" -metadata track="1/1" -metadata genre="${genre}" -metadata copyright="$(get_metadata_value copyright)" "${full_file_path}"
+    if [ "${mode}" == "m4b" ]; then
+        tmp_file_path="${output_directory}/${title}.mp4"
+        </dev/null ffmpeg -loglevel error -stats -activation_bytes "${auth_code}" -i "${path}" -vn -c:a copy "${tmp_file_path}"
+        mv "${tmp_file_path}" "${full_file_path}"
 
-    debug "Created ${full_file_path}."
+        #Extract Cover Art
+        cover_path="${output_directory}/cover.jpg"
+        </dev/null ffmpeg -loglevel error -activation_bytes "${auth_code}" -i "${path}" -an -codec:v copy "${cover_path}"
 
-    if [ "${mode}" == "chaptered" ]; then
-        debug "Extracting chapter files from ${full_file_path}..."
+        #Handle embedding Cover Art
+        if [ `which mp4art` ]; then
+            mp4art --add "${cover_path}" "${full_file_path}"
+            rm "${cover_path}"
+        elif [ `which tageditor` ]; then
+            tageditor -s cover="${cover_path}" --max-padding 100000 -f "${full_file_path}"
+            rm "${cover_path}"
+        elif [ `which atomicparsley` ]; then
+            atomicparsley "${full_file_path}" --artwork "${cover_path}"
+            rm "${cover_path}"
+        else
+            #Fallback: Leave the cover art extracted because I can't find a way to embed it
+            debug "Extracting cover into ${cover_path}..."
+        fi
 
-        while read -r -u9 first _ _ start _ end
-        do
-            if [[ "${first}" = "Chapter" ]]
-            then
-                read -r -u9 _
-                read -r -u9 _ _ chapter
-                chapter_file="${output_directory}/${title} - ${chapter}.${extension}"
-                </dev/null ffmpeg -loglevel error -stats -i "${full_file_path}" -ss "${start%?}" -to "${end}" -codec:a copy -metadata track="${chapter}" "${chapter_file}"
-            fi
-        done 9< "$metadata_file"
-        rm "${full_file_path}"
-        debug "Done creating chapters. Chaptered files contained in ${output_directory}."
+    else
+        </dev/null ffmpeg -loglevel error -stats -activation_bytes "${auth_code}" -i "${path}" -vn -codec:a "${codec}" -ab "$(get_bitrate)k" -map_metadata -1 -metadata title="${title}" -metadata artist="${artist}" -metadata album_artist="$(get_metadata_value album_artist)" -metadata album="$(get_metadata_value album)" -metadata date="$(get_metadata_value date)" -metadata track="1/1" -metadata genre="${genre}" -metadata copyright="$(get_metadata_value copyright)" "${full_file_path}"
+
+        debug "Created ${full_file_path}."
+
+        if [ "${mode}" == "chaptered" ]; then
+            debug "Extracting chapter files from ${full_file_path}..."
+
+            while read -r -u9 first _ _ start _ end
+            do
+                if [[ "${first}" = "Chapter" ]]
+                then
+                    read -r -u9 _
+                    read -r -u9 _ _ chapter
+                    chapter_file="${output_directory}/${title} - ${chapter}.${extension}"
+                    </dev/null ffmpeg -loglevel error -stats -i "${full_file_path}" -ss "${start%?}" -to "${end}" -codec:a copy -metadata track="${chapter}" "${chapter_file}"
+                fi
+            done 9< "$metadata_file"
+            rm "${full_file_path}"
+            debug "Done creating chapters. Chaptered files contained in ${output_directory}."
+        fi
+
+        cover_path="${output_directory}/cover.jpg"
+        debug "Extracting cover into ${cover_path}..."
+        </dev/null ffmpeg -loglevel error -activation_bytes "${auth_code}" -i "${path}" -an -codec:v copy "${cover_path}"
     fi
-
-    cover_path="${output_directory}/cover.jpg"
-    debug "Extracting cover into ${cover_path}..."
-    </dev/null ffmpeg -loglevel error -activation_bytes "${auth_code}" -i "${path}" -an -codec:v copy "${cover_path}"
     debug "Done."
     rm "${metadata_file}"
 done
